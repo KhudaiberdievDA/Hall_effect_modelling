@@ -89,19 +89,23 @@ def Geometry():
     def Is_point_in_mesa(x,y):
         return sum([line.Crosses_negative_line(x,y) for line in Full_Edge]) % 2
 
-    # for i in range(Nx_grid):
-    #     for j in range(Ny_grid):
-    #         if Type_of_a_point[j,i] == 0:
-    #             Type_of_a_point[j,i] = 3*Is_point_in_mesa(i,j)
-    # with open('Geomerty_Type_of_a_point.txt', 'wb') as f:
-    #     np.save(f, Type_of_a_point)
+    #!If there is no such file one should create "Type of a point here"
+    def Create_type_of_a_point_file():
+        for i in range(Nx_grid):
+            for j in range(Ny_grid):
+                if Type_of_a_point[j,i] == 0:
+                    Type_of_a_point[j,i] = 3*Is_point_in_mesa(i,j)
+        with open('Geomerty_Type_of_a_point.txt', 'wb') as f:
+            np.save(f, Type_of_a_point)
+    # Create_type_of_a_point_file()
+
     with open('Geomerty_Type_of_a_point.txt', 'rb') as f:
         Type_of_a_point = np.load(f) 
 
     def plot_geometry():
         plt.imshow(Type_of_a_point)
         plt.show()
-    plot_geometry()
+    # plot_geometry()
     
     return Edge_line, Full_Edge, Type_of_a_line, Type_of_a_point, Nx_grid, Ny_grid, Point_to_line_Dirichlet, Which_are_Dirichlet, Point_to_line_Neumann
 
@@ -109,3 +113,109 @@ def Geometry():
 
 Edge_line, Full_Edge, Type_of_a_line, Type_of_a_point, Nx_grid, Ny_grid, Point_to_line_Dirichlet, Which_are_Dirichlet, Point_to_line_Neumann = Geometry() 
 
+#Some methods for easier life
+def Next_line(i_line):
+    if i_line < len(Full_Edge)-1:
+        return Full_Edge[i_line+1]
+    elif i_line == len(Full_Edge)-1:
+        return Full_Edge[0]
+
+def Previous_line(i_line):
+    return Full_Edge[i_line-1] #Must work that easy\
+
+
+
+def Solve_2D_FEM_any_geometry(Current_contacts, Sigma):
+    Num_Psy1 = np.empty((Ny_grid, Nx_grid),dtype=int)  
+   
+    num_of_var = Edge_line.num_of_Dirichlet
+    for i in range(Nx_grid):
+        for j in range(Ny_grid):
+            if Type_of_a_point[j,i] == 1 or Type_of_a_point[j,i] == 3:
+                Num_Psy1[j,i] = num_of_var
+                num_of_var += 1
+            elif Type_of_a_point[j,i] == 2:
+                Num_Psy1[j,i] = Point_to_line_Dirichlet[j,i]
+            elif Type_of_a_point[j,i] == 0:
+                # Num_Psy1[j,i] = np.NaN
+                Num_Psy1[j,i] = -1#!means NaN for positive integer
+
+
+
+
+    A = lil_matrix((num_of_var, num_of_var)) # Starting to fill our system
+    B = np.zeros(num_of_var)
+
+
+    def square_exist(i,j,di,dj):
+        if i+di >= 0 and i+di < Nx_grid and j+dj >= 0 and j+dj < Ny_grid: 
+            return Type_of_a_point[j,i] != 0 and Type_of_a_point[j+dj,i] != 0 and Type_of_a_point[j,i+di] != 0 and Type_of_a_point[j+dj,i+di] != 0
+        else:
+            return 0
+
+
+    for i_Dirichlet in range(Edge_line.num_of_Dirichlet):
+        if i_Dirichlet == Current_contacts[0]:    
+            A[i_Dirichlet,i_Dirichlet] = 1
+            B[i_Dirichlet] = 0 
+        else:#!for an ordinary contact we should white I == 0
+            current_line = Full_Edge[Which_are_Dirichlet[i_Dirichlet]]
+            for n in range(len(current_line)):
+                i, j  = current_line.x_i[n], current_line.y_i[n]
+                if current_line.orientation == 0: #!horizontal edge
+                    for di in (-1,1):
+                        for dj in (-1,1):        
+                            if square_exist(i,j,di,dj):             
+                                A[i_Dirichlet, Num_Psy1[j   ,i   ]] += -1/2*Sigma
+                                A[i_Dirichlet, Num_Psy1[j+dj,i   ]] += +1/2*Sigma
+                else: #!vertical edge*Sigma
+                    for di in (-1,1):
+                        for dj in (-1,1):        
+                            if square_exist(i,j,di,dj):             
+                                A[i_Dirichlet, Num_Psy1[j   ,i   ]] += -1/2*Sigma
+                                A[i_Dirichlet, Num_Psy1[j   ,i+di]] += +1/2*Sigma
+            A[i_Dirichlet, Previous_line(Which_are_Dirichlet[i_Dirichlet]).Num_Fi1[-1]] += +1
+            A[i_Dirichlet, Previous_line(Which_are_Dirichlet[i_Dirichlet]).Num_Fi2[-1]] += -1
+            A[i_Dirichlet, Next_line(Which_are_Dirichlet[i_Dirichlet]).Num_Fi1[0]] += -1
+            A[i_Dirichlet, Next_line(Which_are_Dirichlet[i_Dirichlet]).Num_Fi2[0]] += +1
+            if i_Dirichlet == Current_contacts[1]:
+                B[i_Dirichlet] = 1#! All the current
+    for i in range(Nx_grid):
+        for j in range(Ny_grid):
+            if Type_of_a_point[j,i] == 1 or Type_of_a_point[j,i] == 3:
+                for di in (-1,1):
+                    for dj in (-1,1):
+                        if square_exist(i,j,di,dj):
+                            A[Num_Psy1[j,i],Num_Psy1[j   ,i   ]] +=  4/6
+                            A[Num_Psy1[j,i],Num_Psy1[j+dj,i   ]] += -1/6
+                            A[Num_Psy1[j,i],Num_Psy1[j   ,i+di]] += -1/6
+                            A[Num_Psy1[j,i],Num_Psy1[j+dj,i+di]] += -2/6
+
+
+    Solution = sp_lalg.spsolve(A.tocsc(), B, use_umfpack=True,permc_spec='MMD_ATA')
+
+    Psy1 = np.empty((Ny_grid, Nx_grid))
+    for i in range(Nx_grid):
+        for j in range(Ny_grid):
+            if Num_Psy1[j,i] >= 0:
+                Psy1[j,i] = Solution[Num_Psy1[j,i]]
+            else:
+                Psy1[j,i] = np.NaN
+
+    
+    Contact_potentials = [Solution[contact] for contact in range(Edge_line.num_of_Dirichlet)]
+
+    fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+    ax.set_box_aspect(aspect = (Nx_grid,Ny_grid,(Nx_grid+Ny_grid)//4))
+    X = np.arange(0, Nx_grid)
+    Y = np.arange(0, Ny_grid)
+    X, Y = np.meshgrid(X, Y)
+    surf = ax.plot_wireframe(X, Y, Psy1, colors = 'darkgreen')
+    plt.show()
+    plt.imshow(Psy1)
+    plt.show()
+
+    return np.abs(Contact_potentials[7] - Contact_potentials[8])/2, np.abs(Contact_potentials[1]-Contact_potentials[7]), np.abs(Contact_potentials[2]-Contact_potentials[6])
+
+
+Solve_2D_FEM_any_geometry(Current_contacts = [5,9], Sigma = 1)
